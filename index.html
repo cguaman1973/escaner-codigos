@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Escáner de códigos</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Roboto, Arial, sans-serif; background: #f3f4f6; color: #111; }
+  header { background: #1f4e79; color: #fff; padding: 14px 16px; font-size: 18px; font-weight: 600; }
+  main { padding: 12px; max-width: 520px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  label { display: block; font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; font-size: 17px; padding: 10px; border: 1px solid #bbb; border-radius: 8px; background: #fff; }
+  textarea { min-height: 60px; resize: vertical; }
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; }
+  button { font-size: 17px; padding: 12px; border: 0; border-radius: 8px; cursor: pointer; }
+  .btn-scan { background: #2e7d32; color: #fff; white-space: nowrap; }
+  .btn-save { background: #1f4e79; color: #fff; width: 100%; margin-top: 14px; }
+  .btn-stop { background: #b71c1c; color: #fff; width: 100%; margin-top: 8px; }
+  .btn-secondary { background: #e5e7eb; color: #111; width: 100%; margin-top: 8px; }
+  #camera { display: none; margin-top: 10px; }
+  #camera.on { display: block; }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  #status { font-size: 15px; margin-top: 10px; min-height: 22px; }
+  .ok { color: #2e7d32; font-weight: 600; }
+  .err { color: #b71c1c; font-weight: 600; }
+  .hint { font-size: 13px; color: #555; margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>Escáner de códigos</header>
+<main>
+  <div class="card">
+    <label for="token">Token de seguridad</label>
+    <input id="token" type="password" autocomplete="off" value="h7Kq2mXv9RtL4sWd8ZpN3bYc6FjA1uEg">
+
+    <label for="tipo">Tipo</label>
+    <select id="tipo">
+      <option value="Bodega">Bodega</option>
+      <option value="Medidor">Medidor</option>
+    </select>
+
+    <label for="codigo">Código de barras</label>
+    <div class="row">
+      <input id="codigo" type="text" inputmode="numeric" placeholder="Escanea o escribe el código">
+      <button class="btn-scan" id="btnScan" type="button">Escanear</button>
+    </div>
+    <div class="hint" id="formato"></div>
+
+    <div id="camera">
+      <video id="video" playsinline muted></video>
+      <button class="btn-stop" id="btnStop" type="button">Cerrar cámara</button>
+    </div>
+
+    <label id="lblCantidad" for="cantidad">Cantidad</label>
+    <input id="cantidad" type="text" inputmode="decimal" placeholder="0">
+
+    <label for="usuario">Usuario</label>
+    <input id="usuario" type="text" placeholder="Tu nombre">
+
+    <label for="notas">Notas</label>
+    <textarea id="notas" placeholder="Opcional"></textarea>
+
+    <button class="btn-save" id="btnSave" type="button">Guardar</button>
+    <button class="btn-secondary" id="btnClear" type="button">Limpiar</button>
+    <div id="status"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzeI-Rvbz3cqb9VsN-ZkCC5hB-1L9qnTFZRLi63U7Qiz-RFMVtgJN_ee1HtrMNDIgid/exec';
+  const HOJA = 'Escaneos';
+
+  const $ = id => document.getElementById(id);
+  const tipo = $('tipo'), codigo = $('codigo'), cantidad = $('cantidad'), usuario = $('usuario'), notas = $('notas');
+  const status = $('status'), formatoEl = $('formato'), lblCantidad = $('lblCantidad');
+
+  // Etiqueta según tipo: Bodega = cantidad, Medidor = lectura
+  function actualizarEtiqueta() {
+    lblCantidad.textContent = tipo.value === 'Medidor' ? 'Lectura' : 'Cantidad';
+    cantidad.placeholder = tipo.value === 'Medidor' ? 'Lectura del medidor' : '0';
+  }
+  tipo.addEventListener('change', actualizarEtiqueta);
+  actualizarEtiqueta();
+
+  // Escaneo con cámara (ZXing funciona en Android e iPhone sobre HTTPS)
+  let reader = null;
+  let escaneando = false;
+
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.CODE_128
+  ]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+  async function abrirCamara() {
+    if (escaneando) return;
+    if (typeof ZXing === 'undefined') {
+      status.innerHTML = '<span class="err">No se cargó el lector. Revisa tu conexión.</span>';
+      return;
+    }
+    $('camera').classList.add('on');
+    reader = new ZXing.BrowserMultiFormatReader(hints);
+    escaneando = true;
+    try {
+      await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
+        if (result) {
+          const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()];
+          if (formato !== 'EAN_13' && formato !== 'CODE_128') return;
+          codigo.value = result.getText();
+          formatoEl.textContent = 'Formato: ' + (formato === 'EAN_13' ? 'EAN-13' : 'Code 128');
+          if (navigator.vibrate) navigator.vibrate(150);
+          cerrarCamara();
+        }
+      });
+    } catch (e) {
+      escaneando = false;
+      $('camera').classList.remove('on');
+      status.innerHTML = '<span class="err">No se pudo abrir la cámara. Permite el acceso en el navegador.</span>';
+    }
+  }
+
+  function cerrarCamara() {
+    if (reader) { try { reader.reset(); } catch (e) {} }
+    reader = null;
+    escaneando = false;
+    $('camera').classList.remove('on');
+  }
+
+  $('btnScan').addEventListener('click', abrirCamara);
+  $('btnStop').addEventListener('click', cerrarCamara);
+
+  // Detecta el formato escrito a mano: EAN-13 (13 dígitos) o Code 128 (otro texto)
+  function detectarFormato(valor) {
+    if (/^\d{13}$/.test(valor)) return 'EAN-13';
+    return 'Code 128';
+  }
+
+  codigo.addEventListener('input', () => {
+    formatoEl.textContent = codigo.value ? 'Formato: ' + detectarFormato(codigo.value.trim()) : '';
+  });
+
+  function fechaLocal() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  // Guardar: envía los datos al script de Apps Script
+  $('btnSave').addEventListener('click', async () => {
+    const valorCodigo = codigo.value.trim();
+    if (!valorCodigo) { status.innerHTML = '<span class="err">Falta el código de barras.</span>'; return; }
+    if (!cantidad.value.trim()) { status.innerHTML = '<span class="err">Falta la cantidad o lectura.</span>'; return; }
+    if (!usuario.value.trim()) { status.innerHTML = '<span class="err">Falta el usuario.</span>'; return; }
+
+    const payload = {
+      token: $('token').value.trim(),
+      hoja: HOJA,
+      fecha: fechaLocal(),
+      tipo: tipo.value,
+      codigo: valorCodigo,
+      formato: detectarFormato(valorCodigo),
+      cantidad: cantidad.value.trim(),
+      usuario: usuario.value.trim(),
+      notas: notas.value.trim()
+    };
+
+    status.textContent = 'Guardando...';
+    $('btnSave').disabled = true;
+    try {
+      // text/plain evita el preflight CORS; Apps Script lee el cuerpo igual
+      const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text();
+      let json = null;
+      try { json = JSON.parse(txt); } catch (e) {}
+      if (json && json.ok) {
+        status.innerHTML = '<span class="ok">Guardado en la hoja.</span>';
+        codigo.value = ''; cantidad.value = ''; notas.value = ''; formatoEl.textContent = '';
+      } else {
+        status.innerHTML = '<span class="err">Error: ' + (json && json.error ? json.error : 'respuesta inesperada') + '</span>';
+      }
+    } catch (e) {
+      // Si la respuesta no se puede leer (CORS), reintenta sin leerla
+      try {
+        await fetch(ENDPOINT, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+        status.innerHTML = '<span class="ok">Enviado. Revisa la hoja para confirmar la fila.</span>';
+        codigo.value = ''; cantidad.value = ''; notas.value = ''; formatoEl.textContent = '';
+      } catch (e2) {
+        status.innerHTML = '<span class="err">No se pudo enviar. Revisa tu conexión.</span>';
+      }
+    } finally {
+      $('btnSave').disabled = false;
+    }
+  });
+
+  $('btnClear').addEventListener('click', () => {
+    codigo.value = ''; cantidad.value = ''; notas.value = ''; formatoEl.textContent = ''; status.textContent = '';
+  });
+</script>
+</body>
+</html>
