@@ -97,47 +97,82 @@
   ]);
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
+  let stream = null;
+  let timer = null;
+  const video = $('video');
+
+  // Un código leído: lo pone en el campo y cierra la cámara
+  function codigoLeido(texto, formato) {
+    if (!escaneando) return;
+    codigo.value = texto;
+    formatoEl.textContent = 'Formato: ' + formato;
+    if (navigator.vibrate) navigator.vibrate(150);
+    cerrarCamara();
+  }
+
   async function abrirCamara() {
     if (escaneando) return;
+    escaneando = true;
+    $('camera').classList.add('on');
+    status.textContent = 'Abriendo cámara...';
+    // Cámara trasera y resolución alta: la frontal o una resolución baja no leen bien
+    const constraints = {
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      video.setAttribute('playsinline', '');
+      await video.play();
+    } catch (e) {
+      cerrarCamara();
+      status.innerHTML = '<span class="err">No se pudo abrir la cámara (' + (e && e.name ? e.name : 'error') + '). Permite el acceso a la cámara y usa HTTPS.</span>';
+      return;
+    }
+
+    if ('BarcodeDetector' in window) {
+      // Android Chrome: detector nativo de EAN-13 y Code 128
+      status.textContent = 'Cámara activa (detector nativo). Apunta al código...';
+      let det;
+      try {
+        det = new BarcodeDetector({ formats: ['ean_13', 'code_128'] });
+      } catch (e) { det = null; }
+      if (det) {
+        timer = setInterval(async () => {
+          if (!escaneando || video.readyState < 2) return;
+          try {
+            const codes = await det.detect(video);
+            if (codes.length) {
+              const f = codes[0].format === 'ean_13' ? 'EAN-13' : 'Code 128';
+              codigoLeido(codes[0].rawValue, f);
+            }
+          } catch (e) { /* cuadro sin lectura */ }
+        }, 150);
+        return;
+      }
+    }
+
+    // Respaldo (iPhone y otros): ZXing sobre el mismo video
     if (typeof ZXing === 'undefined') {
       status.innerHTML = '<span class="err">No se cargó el lector. Revisa tu conexión.</span>';
       return;
     }
-    $('camera').classList.add('on');
-    reader = new ZXing.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80 });
-    escaneando = true;
-    // Cámara trasera y resolución alta: en celulares la frontal o una resolución baja no leen códigos
-    const constraints = {
-      audio: false,
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        focusMode: { ideal: 'continuous' }
-      }
-    };
-    status.textContent = 'Cámara activa. Apunta al código de barras...';
-    try {
-      await reader.decodeFromConstraints(constraints, $('video'), (result, err) => {
-        if (result) {
-          const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()];
-          if (formato !== 'EAN_13' && formato !== 'CODE_128') return;
-          codigo.value = result.getText();
-          formatoEl.textContent = 'Formato: ' + (formato === 'EAN_13' ? 'EAN-13' : 'Code 128');
-          if (navigator.vibrate) navigator.vibrate(150);
-          cerrarCamara();
-        }
-      });
-    } catch (e) {
-      escaneando = false;
-      $('camera').classList.remove('on');
-      status.innerHTML = '<span class="err">No se pudo abrir la cámara (' + (e && e.name ? e.name : 'error') + '). Permite el acceso a la cámara y usa HTTPS.</span>';
-    }
+    status.textContent = 'Cámara activa (lector ZXing). Apunta al código...';
+    reader = new ZXing.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 });
+    reader.decodeFromVideoElement(video, (result) => {
+      if (!result) return;
+      const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()];
+      if (formato !== 'EAN_13' && formato !== 'CODE_128') return;
+      codigoLeido(result.getText(), formato === 'EAN_13' ? 'EAN-13' : 'Code 128');
+    });
   }
 
   function cerrarCamara() {
-    if (reader) { try { reader.reset(); } catch (e) {} }
-    reader = null;
+    if (timer) { clearInterval(timer); timer = null; }
+    if (reader) { try { reader.reset(); } catch (e) {} reader = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
     escaneando = false;
     $('camera').classList.remove('on');
   }
