@@ -116,6 +116,7 @@
         focusMode: { ideal: 'continuous' }
       }
     };
+    status.textContent = 'Cámara activa. Apunta al código de barras...';
     try {
       await reader.decodeFromConstraints(constraints, $('video'), (result, err) => {
         if (result) {
@@ -130,7 +131,7 @@
     } catch (e) {
       escaneando = false;
       $('camera').classList.remove('on');
-      status.innerHTML = '<span class="err">No se pudo abrir la cámara. Permite el acceso en el navegador.</span>';
+      status.innerHTML = '<span class="err">No se pudo abrir la cámara (' + (e && e.name ? e.name : 'error') + '). Permite el acceso a la cámara y usa HTTPS.</span>';
     }
   }
 
