@@ -104,10 +104,20 @@
       return;
     }
     $('camera').classList.add('on');
-    reader = new ZXing.BrowserMultiFormatReader(hints);
+    reader = new ZXing.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80 });
     escaneando = true;
+    // Cámara trasera y resolución alta: en celulares la frontal o una resolución baja no leen códigos
+    const constraints = {
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        focusMode: { ideal: 'continuous' }
+      }
+    };
     try {
-      await reader.decodeFromVideoDevice(undefined, $('video'), (result, err) => {
+      await reader.decodeFromConstraints(constraints, $('video'), (result, err) => {
         if (result) {
           const formato = ZXing.BarcodeFormat[result.getBarcodeFormat()];
           if (formato !== 'EAN_13' && formato !== 'CODE_128') return;
